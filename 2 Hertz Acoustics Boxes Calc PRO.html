@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Lab Pro v8 - Análisis Espectral</title>
+    
+    <!-- 1. Estilos (Tailwind CSS) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. React y ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- 3. Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #18181b; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        body { background-color: #09090b; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+
+        // --- CONSTANTES ---
+        const SPEED_OF_SOUND_M_S = 343; // Velocidad del sonido en m/s
+        const PR_SIZES = ['4','5','6','6x9','8','10','12','13.5','15','18','21']; // Tamaños de Radiador Pasivo en pulgadas
+
+        // --- ICONOS SVG ---
+        const Icons = {
+            Speaker: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><circle cx="12" cy="14" r="4"/><line x1="12" x2="12.01" y1="6" y2="6"/></svg>,
+            Box: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>,
+            Activity: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>,
+            Anchor: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="3"/><line x1="12" x2="12" y1="22" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg>,
+            BarChart2: () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/></svg>,
+            Pointer: () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.239"/><path d="M16 19.998l-3.5-3.5-2 2"/></svg>
+        };
+
+        // --- DATA DE MATERIALES (CORREGIDA CON NOMBRES EN ESPAÑOL) ---
+        const materialDefinitions = {
+            'MDF': { thick: 1.8, Fr: 40, name: 'MDF' },
+            'Plywood': { thick: 1.5, Fr: 55, name: 'Contrachapado' },
+            'Cedro,Wood': { thick: 2.0, Fr: 76, name: 'Madera Cedro' },
+            'Roble,Wood': { thick: 2.0, Fr: 65, name: 'Madera Roble' },
+            'Aluminum': { thick: 0.5, Fr: 120, name: 'Aluminio' },
+            'Plastic': { thick: 0.8, Fr: 80, name: 'Plástico' }, 
+            'Fiberglass': { thick: 0.6, Fr: 95, name: 'Fibra de Vidrio' },
+            'Chipboard': { thick: 1.6, Fr: 30, name: 'Aglomerado' },
+
+        };
+
+        const getSafeNumber = (value, minValue = 1) => Math.max(minValue, Number(value) || minValue);
+        
+        // Mapeo de claves internas a etiquetas en español
+        const boxLabels = {
+            'h': 'Alto',
+            'w': 'Ancho',
+            'd': 'Fondo'
+        };
+
+        // --- MOTOR DE CÁLCULO DE RESPUESTA ---
+        const calculateFullResponse = (sub, box, ventType, slotPort, roundPort, passive, netVol, Fb) => {
+            const points = [];
+            const START_FREQ = 20;
+            const END_FREQ = 250;
+            const STEP = 1.0;
+            
+            // Parámetros seguros
+            const Fs = getSafeNumber(sub.fs, 1);
+            const Qts = getSafeNumber(sub.qts, 0.1);
+            const Vas = getSafeNumber(sub.vas, 1);
+            const Vb = getSafeNumber(netVol, 1);
+            const thick = getSafeNumber(box.thick, 0.1);
+            const count = getSafeNumber(sub.count, 1);
+            const safeFb = getSafeNumber(Fb, 1);
+            
+            // Dimensiones internas
+            const internalH = getSafeNumber(box.h - 2 * thick, 1);
+            const internalW = getSafeNumber(box.w - 2 * thick, 1);
+            const internalD = getSafeNumber(box.d - 2 * thick, 1);
+
+            const alpha = (Vas * count) / Vb;
+
+            // 1. Modos de Caja Axiales
+            const modes = [
+                { dim: internalD / 100 }, { dim: internalW / 100 }, { dim: internalH / 100 }
+            ].map(m => {
+                const F1 = SPEED_OF_SOUND_M_S / (2 * m.dim);
+                // Se simula 1er y 2do armónico axial
+                return [ { F: F1, factor: 0.6 }, { F: F1 * 2, factor: 0.3 } ];
+            }).flat().filter(m => m.F < END_FREQ);
+
+            // 2. Resonancias de Tubo (Pipe Resonances)
+            let pipeResonances = [];
+            let Leff = 0;
+
+            if (ventType === 'slot') {
+                const area = (getSafeNumber(slotPort.h)*getSafeNumber(slotPort.w))/10000;
+                Leff = (getSafeNumber(slotPort.l)/100) + (0.732 * Math.sqrt(area/Math.PI)); 
+            } else if (ventType === 'round') {
+                Leff = (getSafeNumber(roundPort.l)/100) + (0.8 * (getSafeNumber(roundPort.d)/100));
+            }
+
+            if (Leff > 0 && ventType !== 'passive' && ventType !== 'sealed') {
+                const Fp1 = SPEED_OF_SOUND_M_S / (2 * Leff); 
+                if (Fp1 > safeFb * 1.5 && Fp1 < END_FREQ) pipeResonances.push({ F: Fp1, factor: 0.7 });
+                if (Fp1 * 3 < END_FREQ) pipeResonances.push({ F: Fp1 * 3, factor: 0.4 });
+                if (Fp1 * 5 < END_FREQ) pipeResonances.push({ F: Fp1 * 5, factor: 0.2 });
+            }
+
+            // 3. Generar Puntos de Respuesta
+            for (let f = START_FREQ; f <= END_FREQ; f += STEP) {
+                let mag_base = 0;
+
+                if (ventType === 'sealed') {
+                    // Respuesta Caja Sellada (2do Orden) - Fórmula de Butterwort/Bessel
+                    const Qtc = Qts * Math.sqrt(1 + alpha);
+                    const ratio = f / safeFb; // f / Fc
+                    const ratioSq = ratio * ratio;
+                    const denom = Math.sqrt(Math.pow(1 - ratioSq, 2) + Math.pow(ratio / Qtc, 2));
+                    mag_base = 20 * Math.log10(ratioSq / denom);
+                } else {
+                    // Respuesta Vented/Passive (Aproximación 4to Orden)
+                    if (f > 0 && safeFb > 0 && Fs > 0) {
+                        if (f < safeFb * 0.9) {
+                            mag_base = -12 * Math.log10(safeFb / f);
+                        } else if (f > safeFb * 1.5) {
+                            const term1 = 1 + (f / Fs)**4 * (1/alpha)**2;
+                            mag_base = 20 * Math.log10(1 / Math.sqrt(term1)); 
+                        } else {
+                            // Pico de sintonía
+                            const peakFactor = (Qts * Math.sqrt(alpha)) - 0.3; 
+                            const damping = Math.abs(f - safeFb) / (safeFb * 0.5); 
+                            mag_base = Math.max(-10, peakFactor * 5 * Math.exp(-damping * damping));
+                        }
+                    }
+                }
+
+                // 4. Sumar Efectos de Resonancia
+                let mode_effect = 0;
+                modes.forEach(m => {
+                    const delta = Math.abs(f - m.F) / m.F;
+                    // Simulación de pico resonante (Q alto)
+                    if (delta < 0.1) mode_effect += 5 * m.factor * (1 / (1 + 64 * delta * delta));
+                });
+                pipeResonances.forEach(p => {
+                    const delta = Math.abs(f - p.F) / p.F;
+                    // Simulación de pico de tubo (Q medio)
+                    if (delta < 0.05) mode_effect += 3 * p.factor * (1 / (1 + 25 * delta * delta));
+                });
+
+                // 5. Recorte y guardado
+                points.push({ f, mag: Math.max(-24, Math.min(6, mag_base + mode_effect)) });
+            }
+
+            return points;
+        };
+
+        // --- COMPONENTE PRINCIPAL ---
+        function App() {
+            // Inicializamos el material con una clave válida
+            const initialMaterialKey = 'MDF';
+
+            // ESTADOS DE ENTRADA
+            const [sub, setSub] = useState({ size: '12', disp: 4.0, fs: 32, qts: 0.5, vas: 60, count: 1 });
+            const [box, setBox] = useState({ 
+                h: 80, 
+                w: 40, 
+                d: 40, 
+                thick: materialDefinitions[initialMaterialKey].thick, 
+                material: initialMaterialKey, 
+                panelResonance: materialDefinitions[initialMaterialKey].Fr 
+            });
+            const [ventType, setVentType] = useState('slot'); 
+            const [viewMode, setViewMode] = useState('graph');
+            
+            const [slotPort, setSlotPort] = useState({ h: 8, w: 40, l: 30 });
+            const [roundPort, setRoundPort] = useState({ d: 10.16, l: 30, q: 1 });
+            const [passive, setPassive] = useState({ size: '15', fs: 22, vas: 120, mms: 200, addedMass: 0, disp: 2.5, count: 1 });
+            
+            // ESTADOS DE SALIDA
+            const [results, setResults] = useState(null);
+            const [hoverPoint, setHoverPoint] = useState(null);
+
+            // Manejadores de entrada
+            const handleMaterialChange = (newMaterialKey) => {
+                const definition = materialDefinitions[newMaterialKey];
+                if (definition) {
+                    setBox(prev => ({ 
+                        ...prev, 
+                        material: newMaterialKey, 
+                        thick: definition.thick, 
+                        panelResonance: definition.Fr 
+                    }));
+                }
+            };
+
+            const handleInputChange = (e, stateKey, minVal, setter) => {
+                setter(prev => ({...prev, [stateKey]: getSafeNumber(e.target.value, minVal)}));
+            };
+
+            // --- FUNCIÓN DE CÁLCULO PRINCIPAL ---
+            const calculate = useCallback(() => {
+                const safeThick = getSafeNumber(box.thick, 0.1);
+                const h_int = getSafeNumber(box.h, 10) - (2 * safeThick);
+                const w_int = getSafeNumber(box.w, 10) - (2 * safeThick);
+                const d_int = getSafeNumber(box.d, 10) - (2 * safeThick);
+                
+                if (h_int <= 0 || w_int <= 0 || d_int <= 0) {
+                    setResults({ netVol: 0, tuning: 0, qtc: 0, profile: "DIMENSIONES INVÁLIDAS", fullResponse: [] });
+                    return;
+                }
+                const vol_int_total = (h_int * w_int * d_int) / 1000; // Volumen interno total en Litros
+
+                let system_disp = 0; // Desplazamiento del puerto/PR en Litros
+                let Fb = 0;          // Frecuencia de Sintonía (Fb) o Frecuencia de Corte (Fc)
+                let calculatedQtc = 0; // Factor Q total para sellado
+                let fs_passive_modified = passive.fs;
+
+                if (ventType === 'sealed') {
+                    // CÁLCULO CAJÓN SELLADO
+                    const subDisp = getSafeNumber(sub.disp, 0) * getSafeNumber(sub.count, 1);
+                    const net_temp = vol_int_total - subDisp;
+                    if (net_temp > 0) {
+                        const totalVas = getSafeNumber(sub.vas, 1) * getSafeNumber(sub.count, 1);
+                        const alpha = totalVas / net_temp;
+                        Fb = getSafeNumber(sub.fs, 1) * Math.sqrt(1 + alpha); // Fc (Frecuencia de corte)
+                        calculatedQtc = getSafeNumber(sub.qts, 0.1) * Math.sqrt(1 + alpha); // Qtc (Factor de Calidad Total)
+                    }
+                } else if (ventType === 'slot') {
+                    const safeH = getSafeNumber(slotPort.h, 1);
+                    const safeW = getSafeNumber(slotPort.w, 1);
+                    const safeL = getSafeNumber(slotPort.l, 1);
+                    system_disp = ((safeH + safeThick) * (safeW + safeThick) * safeL) / 1000;
+                    
+                    const subDisp = getSafeNumber(sub.disp, 0) * getSafeNumber(sub.count, 1);
+                    const net_m3 = (vol_int_total - system_disp - subDisp) / 1000;
+                    const area_m2 = (safeH * safeW) / 10000;
+                    const eff_len_m = (safeL / 100) + (0.732 * Math.sqrt(area_m2 / Math.PI)); // Corrección de extremos
+                    
+                    if (net_m3 > 0) Fb = (SPEED_OF_SOUND_M_S / (2 * Math.PI)) * Math.sqrt(area_m2 / (net_m3 * eff_len_m));
+
+                } else if (ventType === 'round') {
+                    const r = getSafeNumber(roundPort.d, 1) / 2;
+                    const L = getSafeNumber(roundPort.l, 1);
+                    const Q = getSafeNumber(roundPort.q, 1);
+                    system_disp = ((Math.PI * Math.pow(r + 0.3, 2) * L) / 1000) * Q; // Desplazamiento aproximado
+
+                    const subDisp = getSafeNumber(sub.disp, 0) * getSafeNumber(sub.count, 1);
+                    const net_m3 = (vol_int_total - system_disp - subDisp) / 1000;
+                    const area_m2 = (Math.PI * r * r * Q) / 10000;
+                    const eff_len_m = (L / 100) + (0.8 * (2*r/100));
+
+                    if (net_m3 > 0) Fb = (SPEED_OF_SOUND_M_S / (2 * Math.PI)) * Math.sqrt(area_m2 / (net_m3 * eff_len_m));
+                } else {
+                    // CÁLCULO RADIADOR PASIVO
+                    system_disp = getSafeNumber(passive.disp, 0) * getSafeNumber(passive.count, 1);
+                    const subDisp = getSafeNumber(sub.disp, 0) * getSafeNumber(sub.count, 1);
+                    const net_temp = vol_int_total - system_disp - subDisp;
+                    const mms = getSafeNumber(passive.mms, 1);
+                    const added = getSafeNumber(passive.addedMass, 0);
+                    
+                    // Fs modificado por masa agregada
+                    fs_passive_modified = getSafeNumber(passive.fs, 1) * Math.sqrt(mms / (mms + added));
+                    
+                    const vas_pr = getSafeNumber(passive.vas, 1) * getSafeNumber(passive.count, 1);
+
+                    if (net_temp > 0) Fb = fs_passive_modified * Math.sqrt((vas_pr / net_temp) + 1);
+                }
+
+                const net_vol = vol_int_total - system_disp - (getSafeNumber(sub.disp, 0) * getSafeNumber(sub.count, 1));
+                
+                // Determinación del perfil sonoro
+                let soundProfile = "";
+                if (ventType === 'sealed') {
+                    if (calculatedQtc <= 0.55) soundProfile = "Muy Amortiguado (Transitorio)";
+                    else if (calculatedQtc <= 0.75) soundProfile = "Plana (Audiófilo / Hi-Fi)";
+                    else if (calculatedQtc <= 1.1) soundProfile = "Punch / Pop / Rock";
+                    else soundProfile = "Retumbón / Boom";
+                } else {
+                     const ratio = Fb / getSafeNumber(sub.fs, 1);
+                     if (ratio < 0.75) soundProfile = "Sub-Bajo Profundo";
+                     else if (ratio <= 1.05) soundProfile = "Musical / Equilibrada";
+                     else soundProfile = "SPL / Golpe Seco";
+                }
+
+                // Generar datos de la curva de respuesta
+                const fullResponseData = calculateFullResponse(sub, box, ventType, slotPort, roundPort, passive, net_vol, Fb);
+
+                setResults({ 
+                    netVol: net_vol, 
+                    tuning: Fb || 0, 
+                    qtc: calculatedQtc,
+                    prFsNew: fs_passive_modified, 
+                    profile: soundProfile,
+                    fullResponse: fullResponseData 
+                });
+            }, [box, sub, slotPort, roundPort, passive, ventType]);
+
+            useEffect(() => { calculate(); }, [calculate]);
+
+            // Lógica para la Trazabilidad del Cursor en el gráfico
+            const GRAPH_W = 100;
+            const START_FREQ = 20;
+            const END_FREQ = 250;
+            const FREQ_RANGE = END_FREQ - START_FREQ;
+
+            const handleMouseMove = (e) => {
+                if (!results?.fullResponse) return;
+                const svgRect = e.currentTarget.getBoundingClientRect();
+                const normalizedX = ((e.clientX - svgRect.left) / svgRect.width) * GRAPH_W;
+                const fCursor = START_FREQ + (normalizedX / GRAPH_W) * FREQ_RANGE;
+
+                let closest = null, minDiff = Infinity;
+                results.fullResponse.forEach(p => {
+                    const diff = Math.abs(p.f - fCursor);
+                    if (diff < minDiff) { minDiff = diff; closest = p; }
+                });
+
+                if (minDiff > 5) { setHoverPoint(null); return; }
+
+                setHoverPoint({
+                    f: closest.f,
+                    mag: closest.mag,
+                    x: closest ? ((closest.f - START_FREQ) / FREQ_RANGE) * GRAPH_W : normalizedX,
+                    y: closest ? 60 - ((closest.mag + 24) / 30) * 60 : 0
+                });
+            };
+
+            const graphPoints = useMemo(() => {
+                if (!results?.fullResponse) return "";
+                return results.fullResponse.map(p => {
+                    const x = ((p.f - START_FREQ) / FREQ_RANGE) * GRAPH_W;
+                    const y = 60 - ((p.mag + 24) / 30) * 60; // 60 unidades de alto para -24dB a +6dB
+                    return `${x},${y}`;
+                }).join(" ");
+            }, [results]);
+
+            // Alineación SPL: Monitoreo de Resonancia del Panel vs Frecuencia de Sintonía
+            const getAlignment = () => {
+                if (!results) return { text: "...", color: "text-zinc-500", icon: "•", delta: 0 };
+                const fb = results.tuning;
+                const fr = getSafeNumber(box.panelResonance, 1);
+                const delta = Math.abs(fb - fr);
+                if (delta <= 3) return { text: "Alineación Máxima (SPL)", color: "text-red-500", icon: "🔥", delta };
+                if (delta <= 7) return { text: "Alineación Buena", color: "text-yellow-500", icon: "⚠️", delta };
+                if (delta <= 15) return { text: "Alineación Moderada", color: "text-cyan-500", icon: "🔊", delta };
+                return { text: "Alineación Neutra", color: "text-green-500", icon: "✅", delta };
+            };
+            const align = getAlignment();
+
+            if (!results) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Cargando Audio Lab...</div>;
+
+            return (
+                <div className="min-h-screen bg-zinc-950 text-white font-sans flex justify-center p-2 sm:p-4 selection:bg-cyan-500">
+                <div className="w-full max-w-lg bg-black rounded-3xl border border-zinc-800 shadow-2xl overflow-hidden flex flex-col h-[90vh] sm:h-auto">
+                    
+                    {/* HEADER */}
+                    <div className="bg-cyan-950 p-4 shrink-0 flex justify-between items-center shadow-lg border-b border-cyan-900/50 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 p-4 opacity-10"><Icons.BarChart2 /></div>
+                        <div className="flex items-center gap-3 z-10">
+                            <div className="bg-cyan-500/20 p-2 rounded-lg border border-cyan-500/30">
+                                <span className="text-cyan-400"><Icons.Activity /></span>
+                            </div>
+                            <div>
+                                {/* CAMBIO DEL TÍTULO PRINCIPAL Y SUBTÍTULO */}
+                                <h1 className="text-lg font-black italic tracking-tighter text-white">Hertz: Acoustics Boxes calc PRO <span className="text-cyan-400"></span></h1>
+                                <p className="text-[10px] text-cyan-200 uppercase tracking-widest font-bold">Calculadora de Cajas Acústicas v7</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* CONTENIDO */}
+                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-5">
+                        
+                        <div className="flex gap-2 mb-2">
+                            <button onClick={() => setViewMode('data')} className={`flex-1 py-2 text-xs font-bold uppercase rounded-lg border transition-all ${viewMode === 'data' ? 'bg-zinc-800 border-zinc-600 text-white' : 'bg-black border-zinc-800 text-zinc-500'}`}>Datos</button>
+                            <button onClick={() => setViewMode('graph')} className={`flex-1 py-2 text-xs font-bold uppercase rounded-lg border transition-all ${viewMode === 'graph' ? 'bg-zinc-800 border-zinc-600 text-cyan-400' : 'bg-black border-zinc-800 text-zinc-500'}`}>Gráfica</button>
+                        </div>
+
+                        <div className="bg-zinc-900 rounded-2xl p-1 relative overflow-hidden border border-zinc-700 shadow-xl min-h-[160px]">
+                            <div className="bg-gradient-to-br from-zinc-800 to-zinc-950 rounded-xl p-5 relative z-10 h-full flex flex-col justify-center">
+                                {viewMode === 'data' ? (
+                                    <div className="animate-in fade-in zoom-in duration-300">
+                                        <div className="flex justify-between items-end mb-4">
+                                            <div>
+                                                <p className="text-cyan-500 text-[10px] font-bold uppercase tracking-wider mb-1">{ventType === 'sealed' ? 'Resonancia (Fc)' : 'Tuning (Fb)'}</p>
+                                                <div className="flex items-baseline gap-1"><span className="text-5xl font-black text-white">{results.tuning ? results.tuning.toFixed(1) : '--'}</span><span className="text-lg text-zinc-500 font-bold">Hz</span></div>
+                                            </div>
+                                            <div className="text-right"><p className="text-cyan-500 text-[10px] font-bold uppercase tracking-wider mb-1">Volumen Neto</p><div className="text-3xl font-bold text-white tracking-tight">{results.netVol.toFixed(2)} <span className="text-sm font-normal text-zinc-500">L</span></div></div>
+                                        </div>
+                                        <div className="bg-black/40 rounded-lg p-2 border border-white/5 flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${results.profile.includes('Boom') || results.profile.includes('Retumbón') ? 'bg-red-500' : 'bg-green-500'}`}></div><span className="text-xs font-medium text-white">{results.profile}</span></div>
+                                        
+                                        {ventType === 'sealed' && (
+                                            <div className="mt-3 grid grid-cols-2 gap-2">
+                                                 <div className="bg-zinc-800/50 rounded p-2">
+                                                    <p className="text-[9px] text-zinc-400 uppercase">Factor Q (Qtc)</p>
+                                                    <p className={`text-xl font-bold ${results.qtc > 1.1 ? 'text-yellow-500' : results.qtc > 0.6 ? 'text-green-400' : 'text-cyan-400'}`}>{results.qtc.toFixed(3)}</p>
+                                                 </div>
+                                                 <div className="bg-zinc-800/50 rounded p-2 flex items-center"><p className="text-[9px] text-zinc-500 leading-tight">Controla la "calidad" del bajo.</p></div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="w-full h-full animate-in fade-in zoom-in duration-300 relative">
+                                        <div className="absolute top-0 left-0 text-[9px] text-zinc-500">+6dB</div>
+                                        <div className="absolute top-1/5 left-0 text-[9px] text-zinc-500">0dB</div>
+                                        <div className="absolute bottom-0 left-0 text-[9px] text-zinc-500">-24dB</div>
+                                        <div className="absolute top-1/5 left-6 right-0 h-[1px] bg-zinc-700/50 border-t border-dashed border-zinc-600"></div>
+
+                                        <svg viewBox="0 0 100 60" className="w-full h-36 overflow-visible px-6 relative cursor-crosshair"
+                                            onMouseMove={handleMouseMove} onTouchMove={(e) => handleMouseMove(e.touches[0])} onMouseLeave={() => setHoverPoint(null)} onTouchEnd={() => setHoverPoint(null)}>
+                                            
+                                            {results.tuning > 0 && <line x1={((results.tuning - START_FREQ) / FREQ_RANGE) * GRAPH_W} y1="0" x2={((results.tuning - START_FREQ) / FREQ_RANGE) * GRAPH_W} y2="60" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="2"/>}
+                                            <polyline points={graphPoints} fill="none" stroke="#22d3ee" strokeWidth="2" strokeLinecap="round" className="drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]"/>
+                                            {hoverPoint && <g><line x1={hoverPoint.x} y1="0" x2={hoverPoint.x} y2="60" stroke="#f87171" strokeWidth="1" strokeDasharray="1 2"/><circle cx={hoverPoint.x} cy={hoverPoint.y} r="1.5" fill="#f87171"/></g>}
+                                        </svg>
+                                        
+                                        <div className="flex justify-between text-[9px] text-zinc-500 px-6 mt-1 font-mono"><span>20Hz</span><span>150Hz</span><span>250Hz</span></div>
+                                        <div className={`mt-2 p-2 rounded-lg transition-all ${hoverPoint ? 'bg-zinc-800/80' : 'bg-transparent'}`}>
+                                            <div className="flex justify-center items-center gap-4">
+                                                <div className="flex items-center text-[10px] text-red-400 font-bold uppercase gap-1"><Icons.Pointer /> Frec: </div>
+                                                <span className={`text-xl font-black ${hoverPoint ? 'text-red-300' : 'text-zinc-600'}`}>{hoverPoint ? hoverPoint.f.toFixed(1) : '--'}</span>
+                                                <span className={`text-md font-bold ${hoverPoint ? 'text-zinc-400' : 'text-zinc-700'}`}>({hoverPoint ? hoverPoint.mag.toFixed(1) : '-.-'} dB)</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* SELECTOR TIPO */}
+                        <div className="bg-zinc-900/50 p-1 rounded-lg border border-zinc-800 flex overflow-x-auto">
+                            {[{id: 'sealed', label: 'Sellado'}, {id: 'passive', label: 'Pasivo (PR)'}, {id: 'slot', label: 'Ranura'}, {id: 'round', label: ' PORT TUBO (BR)'}].map(type => (
+                                <button key={type.id} onClick={() => setVentType(type.id)} className={`flex-1 py-2 px-2 rounded text-[10px] font-bold uppercase whitespace-nowrap transition-all ${ventType === type.id ? 'bg-cyan-700 text-white shadow-lg' : 'text-zinc-500 hover:text-white'}`}>{type.label}</button>
+                            ))}
+                        </div>
+                        
+                        {/* SUBWOOFER INPUTS */}
+                        <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 p-3">
+                            <div className="flex justify-between items-center mb-2">
+                                <div className="flex items-center gap-2 text-cyan-500"><Icons.Speaker/><h3 className="font-bold text-[10px] uppercase">Subwoofer</h3></div>
+                                <div className="flex items-center gap-1 bg-black px-2 py-1 rounded border border-zinc-800"><span className="text-[9px] text-zinc-500">QTY:</span><button onClick={() => setSub({...sub, count: Math.max(1, sub.count-1)})} className="text-white px-1">-</button><span className="text-xs text-white font-bold">{sub.count}</span><button onClick={() => setSub({...sub, count: sub.count+1})} className="text-white px-1">+</button></div>
+                            </div>
+                            
+                            {/* Fila 1: Tamaño, Fs, Qts */}
+                            <div className="grid grid-cols-3 gap-2">
+                                <div>
+                                    <label className="text-[9px] text-zinc-500 block mb-1">Tamaño (")</label>
+                                    <select value={sub.size} onChange={(e) => setSub({...sub, size: e.target.value})} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center appearance-none font-bold">
+                                        {['4','5','6','6x9','8','10','12','13.5','15','18','21'].map(s => <option key={s} value={s}>{s}"</option>)}
+                                    </select>
+                                </div>
+                                <div><label className="text-[9px] text-zinc-500 block mb-1">Fs (Hz)</label><input type="number" value={sub.fs} onChange={(e) => handleInputChange(e, 'fs', 1, setSub)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
+                                <div><label className="text-[9px] text-zinc-500 block mb-1">Qts</label><input type="number" step="0.01" value={sub.qts} onChange={(e) => handleInputChange(e, 'qts', 0.01, setSub)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
+                            </div>
+                            
+                            {/* Fila 2: Vas, Disp, (Espacio) */}
+                            <div className="grid grid-cols-3 gap-2 mt-2">
+                                <div><label className="text-[9px] text-zinc-500 block mb-1">Vas (L)</label><input type="number" value={sub.vas} onChange={(e) => handleInputChange(e, 'vas', 1, setSub)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
+                                <div><label className="text-[9px] text-zinc-500 block mb-1">Disp (L)</label><input type="number" value={sub.disp} onChange={(e) => handleInputChange(e, 'disp', 0, setSub)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
+                                <div></div> {/* Espaciador para mantener la cuadrícula */}
+                            </div>
+                        </div>
+
+                        {/* CONFIGURACION PUERTO */}
+                        <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 p-3">
+                            <div className="flex items-center justify-between mb-4 border-b border-white/10 pb-2"><h3 className="text-sm font-bold text-cyan-400 uppercase flex items-center gap-2"><Icons.Anchor/> {ventType === 'sealed' ? 'Cajón Sellado' : ventType === 'slot' ? 'Puerto Ranura' : ventType === 'round' ? 'Puerto Tubo' : 'Radiador Pasivo'}</h3></div>
+
+                            {ventType === 'sealed' && (
+                                <div className="text-center py-4">
+                                    <div className="inline-block p-3 rounded-full bg-cyan-900/20 text-cyan-500 mb-2 border border-cyan-500/20"><Icons.Box /></div>
+                                    <p className="text-xs text-zinc-400 font-medium">Suspensión Acústica</p>
+                                    <p className="text-[10px] text-zinc-600 mt-1">El aire atrapado actúa como resorte.</p>
+                                </div>
+                            )}
+
+                            {ventType === 'slot' && (
+                                <div className="grid grid-cols-3 gap-2">
+                                    {['h','w','l'].map((k)=>( <div key={k}><label className="text-[9px] text-zinc-500 uppercase mb-1 block">{k==='h'?'Alto':k==='w'?'Ancho':'Largo'}</label><input type="number" value={slotPort[k]} onChange={(e)=>handleInputChange(e, k, 1, setSlotPort)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white" /></div> ))}
+                                </div>
+                            )}
+
+                            {ventType === 'round' && (
+                                <div className="grid grid-cols-3 gap-2">
+                                    <div><label className="text-[9px] text-zinc-500 uppercase mb-1 block">Diám.</label><input type="number" value={roundPort.d} onChange={(e)=>handleInputChange(e, 'd', 1, setRoundPort)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white" /></div>
+                                    <div><label className="text-[9px] text-zinc-500 uppercase mb-1 block">Largo</label><input type="number" value={roundPort.l} onChange={(e)=>handleInputChange(e, 'l', 1, setRoundPort)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white" /></div>
+                                    <div><label className="text-[9px] text-zinc-500 uppercase mb-1 block">Cant.</label><input type="number" value={roundPort.q} onChange={(e)=>handleInputChange(e, 'q', 1, setRoundPort)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white" /></div>
+                                </div>
+                            )}
+
+                            {ventType === 'passive' && (
+                                <div>
+                                    <div className="grid grid-cols-3 gap-2 mb-2">
+                                        {/* Nuevo campo de selección de tamaño de Radiador Pasivo */}
+                                        <div>
+                                            <label className="text-[9px] text-zinc-500 block mb-1">Tamaño PR (")</label>
+                                            <select 
+                                                value={passive.size} 
+                                                onChange={(e) => setPassive({...passive, size: e.target.value})} 
+                                                className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center appearance-none font-bold"
+                                            >
+                                                {PR_SIZES.map(s => <option key={s} value={s}>{s}"</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center gap-1 bg-black px-2 py-1 rounded border border-zinc-800 mt-4 h-full"><span className="text-[9px] text-zinc-500">QTY:</span><button onClick={() => setPassive({...passive, count: Math.max(1, passive.count-1)})} className="text-white px-1">-</button><span className="text-xs text-white font-bold">{passive.count}</span><button onClick={() => setPassive({...passive, count: passive.count+1})} className="text-white px-1">+</button></div>
+                                        <span className="text-[10px] bg-cyan-900/30 text-cyan-200 px-2 py-1 rounded flex items-center justify-center text-center mt-4">Fs Carga: {results.prFsNew ? results.prFsNew.toFixed(1) : '--'} Hz</span>
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-3 gap-2 mt-2">
+                                        <div><label className="text-[9px] text-zinc-500 block mb-1">Fs PR</label><input type="number" value={passive.fs} onChange={(e) => handleInputChange(e, 'fs', 1, setPassive)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
+                                        <div><label className="text-[9px] text-zinc-500 block mb-1">Mms</label><input type="number" value={passive.mms} onChange={(e) => handleInputChange(e, 'mms', 1, setPassive)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
+                                        <div><label className="text-[9px] text-zinc-500 block mb-1">Vas PR</label><input type="number" value={passive.vas} onChange={(e) => handleInputChange(e, 'vas', 1, setPassive)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
+                                    </div>
+                                    <div className="bg-cyan-900/10 border border-cyan-500/20 rounded-xl p-3 mt-3">
+                                        <div className="flex justify-between text-[10px] text-zinc-400 mb-1"><span>Masa Extra</span><span className="text-white font-bold">+{passive.addedMass} g</span></div>
+                                        <input type="range" min="0" max="500" step="5" value={passive.addedMass} onChange={(e) => setPassive({...passive, addedMass: Number(e.target.value)})} className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* CAJA Y MATERIALES */}
+                        <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 p-3">
+                            <div className="flex items-center gap-2 mb-2 text-zinc-500"><Icons.Box/><h3 className="font-bold text-[10px] uppercase text-cyan-400">MEDIDAS DE LA CAJA</h3></div>
+                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                {/* Etiquetas en español: Alto, Ancho, Fondo */}
+                                {['h', 'w', 'd'].map(d => ( <div key={d}><label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1 text-center">{boxLabels[d]} (cm)</label><input type="number" value={box[d]} onChange={(e) => handleInputChange(e, d, 10, setBox)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-center text-xs font-bold text-white outline-none"/></div> ))}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                <div>
+                                    <label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1">Materiales</label>
+                                    <select value={box.material} onChange={(e) => handleMaterialChange(e.target.value)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none">
+                                        {Object.entries(materialDefinitions).map(([key, def]) => (
+                                            <option key={key} value={key}>{def.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div><label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1">Grosor (Mm)</label><input type="number" step="0.1" value={box.thick} onChange={(e) => handleInputChange(e, 'thick', 0.1, setBox)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-center text-xs font-bold text-white outline-none"/></div>
+                                <div><label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1">F Resonancia (Hz)</label><input type="number" step="1" value={box.panelResonance} onChange={(e) => handleInputChange(e, 'panelResonance', 1, setBox)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-center text-xs font-bold text-white outline-none"/></div>
+                            </div>
+                            <div className="p-2 bg-zinc-800 rounded-lg flex items-center justify-between mt-4">
+                                <div className="flex items-center gap-2"><span className={`text-lg ${align.color}`}>{align.icon}</span><p className={`text-xs font-semibold ${align.color}`}>{align.text}</p></div>
+                                <div className="text-right"><p className="text-[9px] text-zinc-400 uppercase font-bold mb-0.5">Delta</p><span className="text-sm font-bold text-white">{align.delta.toFixed(1)} Hz</span></div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
