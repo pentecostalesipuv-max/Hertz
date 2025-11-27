@@ -506,60 +506,10 @@
                                                 onChange={(e) => setPassive({...passive, size: e.target.value})} 
                                                 className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center appearance-none font-bold"
                                             >
-                                                {PR_SIZES.map(s => <option key={s} value={s}>{s}"</option>)}
-                                            </select>
-                                        </div>
-                                        <div className="flex items-center gap-1 bg-black px-2 py-1 rounded border border-zinc-800 mt-4 h-full"><span className="text-[9px] text-zinc-500">QTY:</span><button onClick={() => setPassive({...passive, count: Math.max(1, passive.count-1)})} className="text-white px-1">-</button><span className="text-xs text-white font-bold">{passive.count}</span><button onClick={() => setPassive({...passive, count: passive.count+1})} className="text-white px-1">+</button></div>
+                                                {PR_SIZES.map(s => <option key={s} value={s}>{s}"</option>)}ndedbo-zinc-500">QTY:</span><button onClick={() => setPassive({...passive, count: Math.max(1, passive.count-1)})} className="text-white px-1">-</button><span className="text-xs text-white font-bold">{passive.count}</span><button onClick={() => setPassive({...passive, count: passive.count+1})} className="text-white px-1">+</button></div>
                                         <span className="text-[10px] bg-cyan-900/30 text-cyan-200 px-2 py-1 rounded flex items-center justify-center text-center mt-4">Fs Carga: {results.prFsNew ? results.prFsNew.toFixed(1) : '--'} Hz</span>
                                     </div>
                                     
                                     <div className="grid grid-cols-3 gap-2 mt-2">
                                         <div><label className="text-[9px] text-zinc-500 block mb-1">Fs PR</label><input type="number" value={passive.fs} onChange={(e) => handleInputChange(e, 'fs', 1, setPassive)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
-                                        <div><label className="text-[9px] text-zinc-500 block mb-1">Mms</label><input type="number" value={passive.mms} onChange={(e) => handleInputChange(e, 'mms', 1, setPassive)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
-                                        <div><label className="text-[9px] text-zinc-500 block mb-1">Vas PR</label><input type="number" value={passive.vas} onChange={(e) => handleInputChange(e, 'vas', 1, setPassive)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none text-center" /></div>
-                                    </div>
-                                    <div className="bg-cyan-900/10 border border-cyan-500/20 rounded-xl p-3 mt-3">
-                                        <div className="flex justify-between text-[10px] text-zinc-400 mb-1"><span>Masa Extra</span><span className="text-white font-bold">+{passive.addedMass} g</span></div>
-                                        <input type="range" min="0" max="500" step="5" value={passive.addedMass} onChange={(e) => setPassive({...passive, addedMass: Number(e.target.value)})} className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-500" />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                        
-                        {/* CAJA Y MATERIALES */}
-                        <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 p-3">
-                            <div className="flex items-center gap-2 mb-2 text-zinc-500"><Icons.Box/><h3 className="font-bold text-[10px] uppercase text-cyan-400">MEDIDAS DE LA CAJA</h3></div>
-                            <div className="grid grid-cols-3 gap-2 mb-4">
-                                {/* Etiquetas en español: Alto, Ancho, Fondo */}
-                                {['h', 'w', 'd'].map(d => ( <div key={d}><label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1 text-center">{boxLabels[d]} (cm)</label><input type="number" value={box[d]} onChange={(e) => handleInputChange(e, d, 10, setBox)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-center text-xs font-bold text-white outline-none"/></div> ))}
-                            </div>
-                            <div className="grid grid-cols-3 gap-2 mb-4">
-                                <div>
-                                    <label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1">Materiales</label>
-                                    <select value={box.material} onChange={(e) => handleMaterialChange(e.target.value)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-xs text-white outline-none">
-                                        {Object.entries(materialDefinitions).map(([key, def]) => (
-                                            <option key={key} value={key}>{def.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div><label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1">Grosor (Mm)</label><input type="number" step="0.1" value={box.thick} onChange={(e) => handleInputChange(e, 'thick', 0.1, setBox)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-center text-xs font-bold text-white outline-none"/></div>
-                                <div><label className="text-[9px] text-zinc-500 uppercase font-bold block mb-1">F Resonancia (Hz)</label><input type="number" step="1" value={box.panelResonance} onChange={(e) => handleInputChange(e, 'panelResonance', 1, setBox)} className="w-full bg-black border border-zinc-700 rounded p-1.5 text-center text-xs font-bold text-white outline-none"/></div>
-                            </div>
-                            <div className="p-2 bg-zinc-800 rounded-lg flex items-center justify-between mt-4">
-                                <div className="flex items-center gap-2"><span className={`text-lg ${align.color}`}>{align.icon}</span><p className={`text-xs font-semibold ${align.color}`}>{align.text}</p></div>
-                                <div className="text-right"><p className="text-[9px] text-zinc-400 uppercase font-bold mb-0.5">Delta</p><span className="text-sm font-bold text-white">{align.delta.toFixed(1)} Hz</span></div>
-                            </div>
-                        </div>
-
-                    </div>
-                </div>
-                </div>
-            );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
-
+                                        <div><label className="text-[9px] text-zinc-500 bmb-1livdvdidivvdiivdvdidivivddivvdidivivcvclclalasncanclnclaclaslassassNssNasNam
